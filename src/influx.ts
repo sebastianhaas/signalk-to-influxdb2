@@ -309,7 +309,17 @@ export class SKInflux {
   }
 
   flush() {
-    return this.writeApi.flush()
+    // Also deliver anything sitting in the retry buffer (writes that failed
+    // and are waiting on a backoff timer) instead of only the not-yet-sent
+    // batch -- a plain flush() leaves failed-but-retryable writes queued.
+    return this.writeApi.flush(true)
+  }
+
+  // Unlike flush(), permanently shuts down the underlying write client.
+  // Only call this when the SKInflux instance itself is being discarded
+  // (i.e. from stop()) -- any writePoint() call after this throws.
+  close() {
+    return this.flush().then(() => this.writeApi.close())
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
