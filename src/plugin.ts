@@ -52,7 +52,7 @@ export interface App extends Logging, Pick<IRouter, 'get'>, HistoryApiRegistry {
 export interface Plugin {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   start: (c: PluginConfig) => Promise<unknown>
-  stop: () => void
+  stop: () => void | Promise<unknown>
   // signalKApiRoutes: (r: Router) => Router
   id: string
   name: string
@@ -90,6 +90,7 @@ export default function InfluxPluginFactory(app: App): Plugin & InfluxPlugin {
 
   let skInfluxes: SKInflux[] = []
   let onStop: (() => void)[] = []
+  const flush = () => Promise.all(skInfluxes.map((ski) => ski.flush()))
   return {
     start: function (config: PluginConfig) {
       const updatePluginStatus = () => {
@@ -194,13 +195,17 @@ export default function InfluxPluginFactory(app: App): Plugin & InfluxPlugin {
       })
     },
 
-    // eslint-disable-next-line @typescript-eslint/no-empty-function
     stop: () => {
       onStop.forEach((f) => f())
       onStop = []
+      // Without this, any points still sitting in the write client's
+      // buffer (it batches by default, see getWriteApi) are lost if the
+      // process exits before the write client's own flush timer fires --
+      // e.g. the whole Signal K server process being restarted.
+      return Promise.all(skInfluxes.map((ski) => ski.close()))
     },
 
-    flush: () => Promise.all(skInfluxes.map((ski) => ski.flush())),
+    flush,
 
     getValues: (params: QueryParams) => skInfluxes[0].getValues(params),
     getSelfValues: (params: Omit<QueryParams, 'context'>) => skInfluxes[0].getSelfValues(params),

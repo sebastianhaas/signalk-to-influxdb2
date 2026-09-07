@@ -1298,6 +1298,82 @@ describe('Plugin', () => {
     })
   })
 
+  describe('stop()', () => {
+    beforeEach(async () => {
+      bucket = `test_bucket_stop_${Date.now()}`
+      plugin = InfluxPluginFactory(app)
+      await plugin.start({
+        influxes: [
+          {
+            url: `http://${INFLUX_HOST}:8086`,
+            token: 'signalk_token',
+            org: 'signalk_org',
+            bucket,
+            onlySelf: false,
+            writeOptions: {
+              // Large enough that the point below stays in the write
+              // client's buffer instead of being auto-flushed by batch
+              // size, and a flush interval long enough that the periodic
+              // timer can't fire before the test calls stop().
+              batchSize: 1000,
+              flushInterval: 60_000,
+              maxRetries: 1,
+            },
+            filteringRules: [],
+            ignoredPaths: [],
+            ignoredSources: [],
+            useSKTimestamp: false,
+            resolution: 0,
+          },
+        ],
+        outputDailyLog: false,
+      })
+    })
+
+    it('flushes buffered points instead of losing them', async () => {
+      app.signalk.emit('delta', {
+        context: TESTCONTEXT,
+        updates: [
+          {
+            $source: TESTSOURCE,
+            timestamp: new Date('2022-08-17T17:01:00Z'),
+            values: [
+              {
+                path: TESTPATHNUMERIC,
+                value: TESTNUMERICVALUE,
+              },
+            ],
+          },
+        ],
+      })
+
+      // No explicit flush() before stop() -- stop() itself must flush the
+      // pending write buffer, otherwise this point would be lost.
+      await plugin.stop()
+
+      return retry(
+        () =>
+          plugin
+            .getSelfValues({
+              paths: [TESTPATHNUMERIC],
+              influxIndex: 0,
+            })
+            .then((rows) => expect(rows.length).to.equal(1)),
+        [null],
+        {
+          retriesMax: 5,
+          interval: 50,
+        },
+      )
+    })
+
+    it('stops the delta listener even though flush() runs asynchronously', async () => {
+      const before = app.signalk.listenerCount('delta')
+      await plugin.stop()
+      expect(app.signalk.listenerCount('delta')).to.equal(before - 1)
+    })
+  })
+
   describe('Bucket name with forward slash', () => {
     let slashBucket: string
     let slashPlugin: Plugin & InfluxPlugin
